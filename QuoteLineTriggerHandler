@@ -1,0 +1,305 @@
+public class QuoteLineTriggerHandler{
+    public static void run( ){      
+        List<SBQQ__QuoteLine__c>      triggerNew     = (List<SBQQ__QuoteLine__c>)Trigger.new;
+        List<SBQQ__QuoteLine__c>      triggerOld     = (List<SBQQ__QuoteLine__c>)Trigger.old;
+        Map<Id,SBQQ__QuoteLine__c>    triggerNewMap  = (Map<Id,SBQQ__QuoteLine__c>) Trigger.newMap;
+        Map<Id,SBQQ__QuoteLine__c>    triggerOldMap  = (Map<Id,SBQQ__QuoteLine__c>) Trigger.oldMap;
+        set<Id> setQuoteId = new Set<Id>();
+        if(trigger.isInsert || Trigger.isUpdate){
+            for(SBQQ__Quoteline__c qli: triggerNew){            
+                setQuoteId.add(qli.SBQQ__Quote__c);            
+            }  
+        }
+        if(trigger.Isdelete){
+            for(SBQQ__Quoteline__c qli: triggerold){
+                setQuoteId.add(qli.SBQQ__Quote__c);
+            }
+        }
+        if(test.isRunningtest()){
+            //SBQQ.TriggerControl.disable(); 
+                processDML(setQuoteId,'',triggerNew,triggerOld,triggerNewMap,triggerOldMap); 
+                processRollUpSummaryForPermittedUsage(setQuoteId,triggerNew,triggerOld,triggerNewMap,triggerOldMap);
+            //SBQQ.TriggerControl.enable(); 
+        }
+        else{
+            SBQQ.TriggerControl.disable(); 
+                processRollUpSummaryForPermittedUsage(setQuoteId,triggerNew,triggerOld,triggerNewMap,triggerOldMap);
+                updateQLISAfter60seconds(setQuoteId,triggerNew,triggerOld,triggerNewMap,triggerOldMap);
+            SBQQ.TriggerControl.enable(); 
+        }
+    }  
+    public static void processDML(set<Id> setQuoteId,string JobId, List<SBQQ__Quoteline__c> triggerNew,List<SBQQ__Quoteline__c> triggerOld, Map<Id,SBQQ__Quoteline__c> triggerNewMap,Map<Id,SBQQ__Quoteline__c> triggerOldMap){
+        system.debug('####$$$$ PR'+ jobId);
+        map<String, list<SBQQ__Quoteline__c>> mapQLI = new map<String, list<SBQQ__Quoteline__c>>();
+        map<string, list<SBQQ__Quoteline__c>> mapQtyWQLI = new map<string, list<SBQQ__Quoteline__c>>();
+        map<id,SBQQ__quote__c> mapQuotesToUpdate = new map<id,SBQQ__quote__c>();
+        list<SBQQ__Quoteline__c > listQLISToUpdate = new List<SBQQ__Quoteline__c >();
+        for(SBQQ__Quote__c quote: [select id,(select id,SBQQ__StartDate__c,Permitted_Usage__c,SBQQ__EndDate__c,name,SBQQ__Quote__c,SBQQ__Quantity__c,SBQQ__SegmentIndex__c,SBQQ__ProductCode__c,SBQQ__NetTotal__c
+                                   from SBQQ__lineitems__r where SBQQ__SegmentIndex__c != null ORDER BY SBQQ__ProductCode__c, SBQQ__StartDate__c)
+                                   from SBQQ__Quote__c  where id IN : setQuoteId])
+        {                   
+            if(quote.SBQQ__lineitems__r != null && quote.SBQQ__lineitems__r.size() > 0)
+            {
+                for(SBQQ__Quoteline__c iQLI : quote.SBQQ__lineitems__r )
+                {
+                    if(!mapQLI.containsKey(iQLI.SBQQ__ProductCode__c))
+                    {
+                        mapQLI.put(iQLI.SBQQ__ProductCode__c, new list<SBQQ__Quoteline__c>());
+                    }
+                    mapQLI.get(iQLI.SBQQ__ProductCode__c).add(iQLI);                      
+                }
+            }
+         }
+         for(String strProdKey : mapQLI.keySet())
+         {
+             list<SBQQ__Quoteline__c> lstQLIs = mapQLI.get(strProdKey);
+             system.debug('##### PR here'+ lstQLIs);
+
+             for(integer i=1; i< lstQLIs.size() ;i++)
+             {
+                 if(lstQLIs[i-1].Permitted_Usage__c > lstQLIs[i].Permitted_Usage__c){
+                     SBQQ__quote__c quote = new SBQQ__quote__c(
+                     id = lstQLIs[i].SBQQ__quote__c,
+                     ramped_down__c = true);                   
+                     if(!mapQuotesToupdate.containsKey(lstQLIs[i].SBQQ__quote__c)){
+                         mapQuotesToupdate.put(lstQLIS[i].SBQQ__quote__c,quote);
+                     } 
+                     else{
+                         mapQuotesToupdate.get(lstQLIS[i].SBQQ__quote__c).ramped_down__c  = true;
+                     }
+                 break;       
+                 } 
+                 else{
+                     SBQQ__quote__c quote = new SBQQ__quote__c(
+                     id = lstQLIs[i].SBQQ__quote__c,
+                     ramped_down__c = false);                   
+                     if(!mapQuotesToupdate.containsKey(lstQLIs[i].SBQQ__quote__c)){
+                         mapQuotesToupdate.put(lstQLIS[i].SBQQ__quote__c,quote);
+                     } 
+                 }
+             }
+         }
+         system.debug('$$$$$$$ PR'+ mapQuotesToupdate);
+         for(String strProdKey : mapQLI.keySet())
+         {
+            list<SBQQ__Quoteline__c> lstQLIs = mapQLI.get(strProdKey);
+            for(integer i=0; i< lstQLIs.size() ;i++)
+            {
+                if(!mapQtyWQLI.containsKey(lstQLIs[i].SBQQ__ProductCode__c+lstQLIs[i].SBQQ__Quantity__c))
+                {
+                    mapQtyWQLI.put(lstQLIs[i].SBQQ__ProductCode__c+lstQLIs[i].SBQQ__Quantity__c, new list<SBQQ__Quoteline__c>());
+                }
+                mapQtyWQLI.get(lstQLIs[i].SBQQ__ProductCode__c+ lstQLIs[i].SBQQ__Quantity__c).add(lstQLIs[i]);
+            } 
+            
+         }
+         for(string strProdKey : mapQtyWQLI.keySet())
+         {
+            list<SBQQ__Quoteline__c> lstQLIs = mapQtyWQLI.get(strProdKey);
+            list<SBQQ__Quoteline__c> lstQLIstemp = new list<SBQQ__Quoteline__c>{lstQLIs[0]};
+            double ttl_price = 0.0;
+            for(integer i=1; i< lstQLIs.size() ;i++)
+            {      
+                if((lstQLIs[i-1].SBQQ__SegmentIndex__c +1) != lstQLIs[i].SBQQ__SegmentIndex__c ){
+                    ttl_price = 0.0;
+                    for(integer j=0; j<lstQLIstemp.size(); j++){
+                       ttl_price = ttl_price + lstQLIstemp[j].SBQQ__NetTotal__c;
+                    }
+                    for(integer j=0; j<lstQLIstemp.size(); j++){
+                        lstQLIstemp[j].Ramping_Summary__c = lstQLIstemp[0].SBQQ__ProductCode__c + '+' + lstQLIstemp[0].SBQQ__Quantity__c + '+'+ lstQLIstemp[0].SBQQ__StartDate__c.format()+ '+' + lstQLIstemp[lstQLIstemp.size()-1].SBQQ__EndDate__c.format();
+                        lstQLIstemp[j].Ramping_Group_Start_Date__c = lstQLIstemp[0].SBQQ__StartDate__c;
+                        lstQLIstemp[j].Ramping_Group_End_Date__c = lstQLIstemp[lstQLIstemp.size()-1].SBQQ__EndDate__c;
+                        lstQLIstemp[j].Ramping_Group_Total_Price__c = ttl_price ;
+                        listQLISToUpdate.add(lstQLIstemp[j]); 
+                    }     
+                    
+                    lstQLIstemp.clear();
+                    lstQLIstemp.add(lstQLIs[i]);        
+                }
+                else{   
+                        
+                    lstQLIstemp.add(lstQLIs[i]);  
+                }
+            }
+            ttl_price = 0.0;
+            for(integer j=0; j<lstQLIstemp.size(); j++){
+               ttl_price = ttl_price + lstQLIstemp[j].SBQQ__NetTotal__c;                     
+            }
+            for(integer j=0; j<lstQLIstemp.size(); j++){
+                lstQLIstemp[j].Ramping_Summary__c = lstQLIstemp[j].SBQQ__ProductCode__c + '+' + lstQLIstemp[j].SBQQ__Quantity__c + '+'+ lstQLIstemp[0].SBQQ__StartDate__c.format()+ '+' + lstQLIstemp[lstQLIstemp.size()-1].SBQQ__EndDate__c.format();
+                lstQLIstemp[j].Ramping_Group_Start_Date__c = lstQLIstemp[0].SBQQ__StartDate__c;
+                lstQLIstemp[j].Ramping_Group_End_Date__c = lstQLIstemp[lstQLIstemp.size()-1].SBQQ__EndDate__c;
+                lstQLIstemp[j].Ramping_Group_Total_Price__c = ttl_price ;       
+                listQLISToUpdate.add(lstQLIstemp[j]) ;
+            }                               
+         }   
+         SBQQ.TriggerControl.disable();    
+         Database.SaveResult[] srList = Database.update(listQLISToUpdate, false); 
+         SBQQ.TriggerControl.enable(); 
+  
+         List<Id> savedQLIS = new List<ID>(); 
+         List<SBQQ__Quote__c> listQuotesToUpdate = new List<SBQQ__Quote__c>();    
+         for(Database.SaveResult SR:srList){
+            if(sr.issuccess()){
+                savedQLIS.add(sr.getId());
+            }
+            else{
+                caught_exception__c exept = new caught_exception__c(
+                        Class_Name__c = 'QuoteLineTriggerHandler',
+                        exception_method__c = 'processDML',
+                        full_exception__c = string.valueof(sr.getErrors())
+                    );
+                    insert exept;
+            }
+         }
+         for(SBQQ__Quoteline__c qli: [select id,SBQQ__Quote__c  from SBQQ__Quoteline__c where id IN: savedQLIS] ){
+             SBQQ__Quote__c quote = new SBQQ__quote__c(
+                 id = qli.SBQQ__Quote__c,
+                 JobId__c = jobId,
+                 QLIS_Processed__c   = true,
+                 QLI_processing_status__c = 'QLIS Processed'
+             );
+             if(!mapQuotesToupdate.containsKey(qli.SBQQ__quote__c)){
+                         mapQuotesToupdate.put(qli.SBQQ__quote__c,quote);
+             }
+             else{
+                 mapQuotesToupdate.get(qli.SBQQ__Quote__c).QLIS_Processed__c = true;
+                 mapQuotesToupdate.get(qli.SBQQ__Quote__c).QLI_processing_status__c = 'QLIS Processed';
+                 mapQuotesToupdate.get(qli.SBQQ__Quote__c).JobId__c = jobId;
+             }
+             /*if(!listQuotesToUpdate.contains(quote)){
+                 listQuotesToUpdate.add(quote);  
+             }  */         
+         }
+         system.debug('%%%%%% PR'+ mapQuotesToupdate);
+         for(SBQQ__Quote__c quote: mapQuotesToupdate.values()){
+                 listQuotesToUpdate.add(quote);
+         }
+         //listQuotesToUpdate.addall(mapQuotesToupdate.values());
+         if(!listQuotesToUpdate.isEmpty()){
+             SBQQ.TriggerControl.disable(); 
+             database.saveresult[] SR = database.update(listQuotesToUpdate);
+             SBQQ.TriggerControl.enable(); 
+
+             for(database.saveresult s: SR){
+                 if(s.isSuccess()){
+                 }
+                 else{
+                     caught_exception__c exept = new caught_exception__c(
+                        Class_Name__c = 'QuoteLineTriggerHandler',
+                        exception_method__c = 'processDML',
+                        full_exception__c = string.valueof(s.getErrors())
+                    );
+                    insert exept;
+                 }
+             }
+         }       
+    }          
+    public static void updateQLISAfter60seconds(set<Id> setQuoteId,List<SBQQ__Quoteline__c> triggerNew,List<SBQQ__Quoteline__c> triggerOld, Map<Id,SBQQ__Quoteline__c> triggerNewMap,Map<Id,SBQQ__Quoteline__c> triggerOldMap){
+        QLIScheduler SC = new QLIScheduler ();
+        SC.triggerNew = triggerNew;
+        SC.triggerOld = triggerOld;
+        SC.triggerNewMap = triggerNewMap;
+        SC.triggerOldMap = triggerOldMap;
+        SC.setQuoteId = setQuoteId;
+        
+        Datetime sysTime = System.now().addminutes(1);
+        String chron_exp =  sysTime.second() + ' ' + sysTime.minute() + ' ' + sysTime.hour() + ' ' + sysTime.day() + ' ' + sysTime.month() + ' ? ' + sysTime.year();    
+        String strJobName = 'QuoteLineTriggerHandler-' + Integer.valueof((Math.random() * 100)) + userinfo.getUserId() + sysTime.second() + '_' + sysTime.minute() + '_' + sysTime.hour() + '_' + sysTime.day() + '_' + sysTime.month();
+        String jobId = System.schedule(strJobName , chron_exp , SC);
+        system.debug('###### PR'+ jobId);
+    }
+    public static void processRollUpSummaryForPermittedUsage(set<Id> setQuoteId,List<SBQQ__Quoteline__c> triggerNew,List<SBQQ__Quoteline__c> triggerOld, Map<Id,SBQQ__Quoteline__c> triggerNewMap,Map<Id,SBQQ__Quoteline__c> triggerOldMap){  
+        double countofEntQLIS  = 0;
+        double countofNonEntQLIS  = 0;
+        Map<Id,double> mapQLIPermittedUsage = new Map<Id,double>();
+        Map<Id,double> mapQuoteWENTQLICount = new Map<Id,double>();
+        Map<Id,double> mapQuoteWNonENTQLICount = new Map<Id,double>();
+        //Map<Id,double> mapQLIPermittedMAXUsage = new Map<Id,double>();
+        //map<Id,Decimal> mapQuoteWSegmentIndex = new map<Id,Decimal>();
+        List<SBQQ__quote__c> quoteListToUpdate = new List<SBQQ__quote__c>();  
+        list<SBQQ__Quoteline__c> qlis = [select id,Permitted_usage__c,SBQQ__SegmentLabel__c, Total_Quantity__c, SBQQ__productcode__c,SBQQ__quantity__c from SBQQ__Quoteline__c where SBQQ__Quote__c in: setQuoteId ];    
+        system.debug('#####'+ qlis);    
+        for(AggregateResult agg: [Select SBQQ__Quote__c, AVG(Permitted_Usage__c),MAX(Permitted_Usage__c) from SBQQ__Quoteline__c where SBQQ__Quote__c IN : setQuoteId AND Permitted_Usage__c <> null group by SBQQ__Quote__c ]){
+            mapQLIPermittedUsage .put((Id)agg.get('SBQQ__quote__c'),(Double)agg.get('expr0'));
+           // mapQLIPermittedMAXUsage.put((Id)agg.get('SBQQ__quote__c'),(Double)agg.get('expr1'));
+        }      
+       /* for(SBQQ__Quoteline__c  qli: [select id,permitted_usage__c, SBQQ__Quote__c,SBQQ__SegmentIndex__c from SBQQ__quoteline__c where SBQQ__quote__c in: setQuoteId ORDER BY SBQQ__SegmentIndex__c]){
+            if(mapQLIPermittedMAXUsage.containsKey(qli.SBQQ__Quote__c) && mapQLIPermittedMAXUsage.get(qli.SBQQ__Quote__c) == qli.permitted_usage__c){
+                mapQuoteWSegmentIndex.put(qli.SBQQ__Quote__c,qli.SBQQ__SegmentIndex__c );
+            }
+        }*/
+        /*List<SBQQ__Quoteline__c > listQLI = [select id,permitted_usage__c, SBQQ__Quote__c,SBQQ__SegmentIndex__c from SBQQ__quoteline__c where SBQQ__quote__c in: setQuoteId where SBQQ__segmentIndex__c != null ORDER BY SBQQ__];
+        for(integer i= 1; i<listQLI.size() ;i++ ){
+            if((listQLI[i-1].SBQQ__SegmentIndex__c == listQLI[i].SBQQ__SegmentIndex__c +1) && listQLI[i-1]
+        }*/
+        
+        for(SBQQ__quoteline__c qli: [select id,SBQQ__ProductFamily__c,isComponent__c,SBQQ__Quote__c from SBQQ__Quoteline__c where sbqq__quote__c IN: setQuoteid]){
+            if(qli.SBQQ__ProductFamily__c!= null && qli.SBQQ__ProductFamily__c.containsIgnoreCase('Enterprise') && !qli.IsComponent__c){
+                if(!mapQuoteWENTQLICount .containsKey(qli.SBQQ__quote__c)){
+                    countofEntQLIS = countofEntQLIS+ 1;
+                    mapQuoteWENTQLICount .put(qli.SBQQ__quote__c,countofEntQLIS);
+                    system.debug('#@#### Pr'+ mapQuoteWENTQLICount);
+
+                }
+                else{            
+                  countofEntQLIS  = mapQuoteWENTQLICount.get(qli.SBQQ__quote__c) +1;
+                  mapQuoteWENTQLICount .remove(qli.SBQQ__quote__c);
+                  mapQuoteWENTQLICount .put(qli.SBQQ__quote__c,countofEntQLIS  );
+                  system.debug('#@#### Pr'+ mapQuoteWENTQLICount);
+                }
+            }
+            if(qli.SBQQ__ProductFamily__c!= null && !qli.SBQQ__ProductFamily__c.containsIgnoreCase('Enterprise') && !qli.SBQQ__ProductFamily__c.containsIgnoreCase('Professional Services') && !qli.IsComponent__c){
+                if(!mapQuoteWNonENTQLICount.containsKey(qli.SBQQ__quote__c)){
+                    countofNonEntQLIS = countofNonEntQLIS + 1;
+                    mapQuoteWNonENTQLICount .put(qli.SBQQ__quote__c,countofNonEntQLIS );
+                }
+                else{            
+                  countofNonEntQLIS = mapQuoteWNonENTQLICount .get(qli.SBQQ__quote__c) +1;
+                  mapQuoteWNonENTQLICount .remove(qli.SBQQ__quote__c);
+                  mapQuoteWNonENTQLICount .put(qli.SBQQ__quote__c,countofNonEntQLIS  );
+                }
+            }
+        }
+        system.debug('$$$$$ PR'+ mapQLIPermittedUsage);
+        system.debug('##### PR'+ mapQuoteWENTQLICount);
+        system.debug('##### PR'+ mapQuoteWNonENTQLICount );
+        
+        for(SBQQ__quote__c quote: [Select Id, Permitted_usage_rollup__c from SBQQ__quote__c where Id IN :setQuoteId]){
+            quote.Permitted_usage_rollup__c = mapQLIPermittedUsage.get(quote.Id);
+            quote.Count_of_ENT_Line_Items__c = mapQuoteWENTQLICount .get(Quote.Id);
+            quote.Count_of_non_ENT_Line_Items__c = mapQuoteWNonENTQLICount.get(Quote.Id);
+           // quote.max_permitted_usage__c = mapQLIPermittedMAXUsage.containsKey(quote.id)?mapQLIPermittedMAXUsage.get(quote.Id): null;
+           // quote.Segment_index_max_permittedUsag__c = mapQLIPermittedMAXUsage.containsKey(quote.id)?mapQuoteWSegmentIndex.get(quote.id):null;
+            //quote.QLI_processing_status__c = 'QLIS processing';
+            //quote.QLIS_Processed__c   = true;
+            quoteListToUpdate.add(quote);
+        }        
+        system.debug('$$$$$$'+ quoteListToUpdate);
+        if(quoteListToUpdate !=null && quoteListToUpdate .size()>0){
+            SBQQ.TriggerControl.disable(); 
+            database.saveresult[] SR = database.update(quoteListToUpdate) ;
+            SBQQ.TriggerControl.enable(); 
+
+            for(database.saveresult s: SR){
+                if(s.Issuccess()){
+                   system.debug('******* PR'+ s.getId());
+                }
+                else{
+                    system.debug('******* PR'+ s.getErrors());
+                    caught_exception__c exept = new caught_exception__c(
+                        Class_Name__c = 'QuoteLineTriggerHandler',
+                        exception_method__c = 'processRollUpSummaryForPermittedUsage',
+                        full_exception__c = string.valueof(s.getErrors())
+                    );
+                    insert exept;
+                }
+                
+            }
+        }        
+    }   
+   
+    public class TrigCustomException extends Exception{
+
+    }      
+}
